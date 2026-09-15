@@ -1,10 +1,10 @@
 use std::{collections::HashSet, sync::Arc};
 
-use osu_difficulty_runtime::{Dataset, ManiaDataset};
+use osu_difficulty_runtime::{Dataset, ManiaDataset, ManiaGameMod};
 use tauri::State;
 
 use crate::{
-    domain::{AppSettings, Ruleset},
+    domain::{AppSettings, Ruleset, Score},
     error::{CommandError, CommandResult},
     features::{
         account::ensure_access_token,
@@ -20,7 +20,9 @@ use crate::{
                 map_runtime_error, options_from_recommendation_request, options_from_request,
                 recommendation_response_from_runtime, response_from_runtime,
             },
-            recommendation::{ManiaSeed, mania_seed_ids, requested_seed_limit, seed_ids},
+            recommendation::{
+                ManiaSeed, ManiaSeedSelection, mania_seed_ids, requested_seed_limit, seed_ids,
+            },
             source::{fetch_online_osu, parse_beatmap_id, read_local_osu},
         },
     },
@@ -172,25 +174,36 @@ pub async fn recommend_similar_beatmaps(
         }
     };
     let requested_seed_limit = requested_seed_limit(request.seed_limit());
-    let (standard_seed_ids, mania_seeds, initially_skipped_seed_count) =
-        if ruleset == Ruleset::Mania {
-            let (seeds, skipped) = mania_seed_ids(&scores, requested_seed_limit);
-            (Vec::new(), seeds, skipped)
-        } else {
-            (seed_ids(&scores, requested_seed_limit), Vec::new(), 0)
-        };
+    // 参考成绩与候选谱面使用同一个 Mod 池，筛选必须发生在截取参考数量之前。
+    let mania_mod_pool = if ruleset == Ruleset::Mania {
+        Some(mania_options_from_recommendation_request(&request)?.candidate_mods)
+    } else {
+        None
+    };
+    let mania_selection = mania_mod_pool
+        .as_deref()
+        .map(|pool| mania_seed_ids(&scores, requested_seed_limit, pool));
+    let (standard_seed_ids, mania_seeds, initially_skipped_seed_count) = match &mania_selection {
+        Some(selection) => (
+            Vec::new(),
+            selection.seeds.clone(),
+            selection.unusable_mod_scores,
+        ),
+        None => (seed_ids(&scores, requested_seed_limit), Vec::new(), 0),
+    };
     if standard_seed_ids.is_empty() && mania_seeds.is_empty() {
+        if let (Some(pool), Some(selection)) = (mania_mod_pool.as_deref(), mania_selection.as_ref())
+        {
+            return Err(CommandError::new(
+                "NO_RECOMMENDATION_SEEDS",
+                mania_seed_error_message(kind, &scores, pool, selection),
+            ));
+        }
         return Err(CommandError::new(
             "NO_RECOMMENDATION_SEEDS",
-            match (ruleset, kind) {
-                (Ruleset::Mania, SimilarityRecommendationKind::Recent) => {
-                    "没有可用于推荐的 NM / DT / HT Mania 最近通过成绩"
-                }
-                (Ruleset::Mania, SimilarityRecommendationKind::Best) => {
-                    "没有可用于推荐的 NM / DT / HT Mania BP 成绩"
-                }
-                (_, SimilarityRecommendationKind::Recent) => "没有可用于推荐的最近通过成绩",
-                (_, SimilarityRecommendationKind::Best) => "没有可用于推荐的 BP 成绩",
+            match kind {
+                SimilarityRecommendationKind::Recent => "没有可用于推荐的最近通过成绩",
+                SimilarityRecommendationKind::Best => "没有可用于推荐的 BP 成绩",
             },
         ));
     }
@@ -416,6 +429,44 @@ fn no_usable_seed_error(ruleset: Ruleset) -> CommandError {
             Ruleset::Mania => "成绩中的 Mania 谱面均无法读取，或不是受支持的 4K、6K、7K",
             _ => "成绩中的谱面均无法从本地索引或在线谱面源读取",
         },
+    )
+}
+
+/// 区分三种没有参考成绩的原因：服务器没有返回记录、Mod 池不匹配、成绩无法作为参考。
+fn mania_seed_error_message(
+    kind: SimilarityRecommendationKind,
+    scores: &[Score],
+    mod_pool: &[ManiaGameMod],
+    selection: &ManiaSeedSelection,
+) -> String {
+    if scores.is_empty() {
+        return match kind {
+            SimilarityRecommendationKind::Recent => {
+                "osu! 服务器没有返回最近的 Mania 通过成绩。请确认当前账号有已上传的成绩，或改用本地 .osu 查询。"
+                    .to_owned()
+            }
+            SimilarityRecommendationKind::Best => {
+                "osu! 服务器没有返回当前账号的 Mania BP 成绩。".to_owned()
+            }
+        };
+    }
+    let pool = mod_pool
+        .iter()
+        .map(|game_mod| game_mod.as_str())
+        .collect::<Vec<_>>()
+        .join(" / ");
+    if selection.outside_mod_pool_scores > 0 {
+        return format!(
+            "服务器返回的 {} 条 Mania 成绩里没有 {} 的参考成绩，其中 {} 张使用了其他 Mod。请切换参考 Mod，或勾选多 Mod 混池推荐。",
+            scores.len(),
+            pool,
+            selection.outside_mod_pool_scores
+        );
+    }
+    format!(
+        "服务器返回的 {} 条 Mania 成绩里有 {} 张使用了会改变键位排列或倍率的 Mod（包含自定义倍率），无法作为参考成绩。",
+        scores.len(),
+        selection.unusable_mod_scores
     )
 }
 
