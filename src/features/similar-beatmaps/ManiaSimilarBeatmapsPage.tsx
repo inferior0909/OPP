@@ -9,6 +9,7 @@ import { Button, Card, EmptyState, InfoTip } from "../../shared/components/ui";
 import { APP_TIME_ZONE, errorMessage } from "../../shared/lib/format";
 import { desktopApi } from "../../shared/lib/tauri";
 import type {
+  AnySimilarityResult,
   ManiaKeyCount,
   ManiaGameMod,
   ManiaSimilarityQueryRequest,
@@ -30,6 +31,7 @@ import {
   useSimilarityRecommendation,
 } from "./api";
 import { createManiaSimilarityRequest } from "./defaults";
+import { MmaPatternPanel } from "./MmaPatternPanel";
 import {
   onlineBeatmapRouteForSimilarityResult,
   parseSimilarityLaunch,
@@ -366,7 +368,9 @@ export function ManiaSimilarBeatmapsPage() {
   }
 
   async function downloadResults(results: ManiaSimilarityResult[]) {
-    if (!results.length) return;
+    // 数据集里的本地谱面（source-free 记录）没有在线谱面集，不能进入下载队列。
+    const downloadable = results.filter((result) => result.online_url.length > 0);
+    if (!downloadable.length) return;
     let destination = quickDownloadDirectory ?? settings.data?.beatmap_download_directory ?? "";
     if (!destination) {
       destination = await desktopApi.chooseBeatmapDownloadDirectory(null) ?? "";
@@ -379,14 +383,14 @@ export function ManiaSimilarBeatmapsPage() {
     }
     setConfigurationError(null);
     setDownloadNotice(null);
-    setQuickDownloadId(results.length === 1 ? results[0].beatmap_id : -1);
+    setQuickDownloadId(downloadable.length === 1 ? downloadable[0].beatmap_id : -1);
     try {
       const downloaded = await desktopApi.downloadOnlineBeatmapsets({
         destination,
         provider: resolveDefaultDownloadProvider(settings.data),
         overwrite: false,
         include_video: settings.data?.include_video_in_beatmap_downloads ?? true,
-        items: Array.from(new Map(results.map((result) => [result.beatmapset_id, { beatmapset_id: result.beatmapset_id, artist: result.artist, title: result.title }])).values()),
+        items: Array.from(new Map(downloadable.map((result) => [result.beatmapset_id, { beatmapset_id: result.beatmapset_id, artist: result.artist, title: result.title }])).values()),
       });
       setDownloadNotice(downloaded.completed > 0 ? `已下载 ${downloaded.completed} 个谱面集到：${downloaded.destination}` : `下载已处理；保存位置：${downloaded.destination}`);
     } catch (error) {
@@ -399,6 +403,13 @@ export function ManiaSimilarBeatmapsPage() {
   function openOnlineBeatmap(result: ManiaSimilarityResult) {
     saveManiaSimilaritySession({ request, response, recommendationResponse, selectedResultKey, activeKeyCount, batches, scrollY: window.scrollY || null });
     navigate(onlineBeatmapRouteForSimilarityResult(result), { state: { returnTo: "/online/similar" } });
+  }
+
+  /** 本地谱面（source-free 记录）没有在线页面，历史记录里只展示、不跳转。 */
+  function openHistoryEntry(result: AnySimilarityResult) {
+    if (!result.online_url) return;
+    setHistoryOpen(false);
+    if (result.ruleset === "mania") openOnlineBeatmap(result);
   }
 
   async function togglePreview(result: ManiaSimilarityResult) {
@@ -446,7 +457,7 @@ export function ManiaSimilarBeatmapsPage() {
           <Dialog.Content className="fixed left-1/2 top-1/2 z-[270] flex max-h-[min(760px,calc(100vh-32px))] w-[min(760px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-2xl border border-cyan-300/20 bg-[#101724] shadow-2xl outline-none">
             <div className="flex items-start justify-between gap-4 border-b border-white/[0.08] p-6"><div><Dialog.Title className="text-lg font-semibold text-white">今日 Mania 推荐历史</Dialog.Title><Dialog.Description className="mt-1 text-sm text-slate-400">按 Mania 模式独立记录，共 {recommendationHistory.length} 张。</Dialog.Description></div><Dialog.Close aria-label="关闭今日推荐历史" className="text-slate-500 transition hover:text-white"><X className="size-5" /></Dialog.Close></div>
             <div className="min-h-0 flex-1 overflow-y-auto p-5">
-              {recommendationHistory.length ? <div className="space-y-2">{recommendationHistory.map(({ displayed_at, key_count, result }) => <button className="flex w-full items-center gap-4 rounded-xl border border-white/[0.06] bg-black/10 px-4 py-3 text-left transition hover:border-cyan-300/20 hover:bg-white/[0.04]" key={result.beatmap_id} onClick={() => { setHistoryOpen(false); if (result.ruleset === "mania") openOnlineBeatmap(result); }} type="button"><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-100">{result.artist} - {result.title}</p><p className="mt-1 truncate text-xs text-slate-500">{key_count}K · [{result.version}] · {result.creator}</p></div><time className="shrink-0 text-xs text-slate-500">{new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: APP_TIME_ZONE }).format(new Date(displayed_at))}</time></button>)}</div> : <EmptyState title="今天还没有 Mania 推荐记录" description="当一页推荐谱面完整展示后，会自动出现在这里。" />}
+              {recommendationHistory.length ? <div className="space-y-2">{recommendationHistory.map(({ displayed_at, key_count, result }) => <button className="flex w-full items-center gap-4 rounded-xl border border-white/[0.06] bg-black/10 px-4 py-3 text-left transition hover:border-cyan-300/20 hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-60" disabled={!result.online_url} key={result.beatmap_id} onClick={() => openHistoryEntry(result)} title={result.online_url ? undefined : "本地谱面没有在线页面"} type="button"><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium text-slate-100">{result.artist} - {result.title}</p><p className="mt-1 truncate text-xs text-slate-500">{key_count}K · [{result.version}] · {result.creator}{result.online_url ? "" : " · 本地谱面"}</p></div><time className="shrink-0 text-xs text-slate-500">{new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: APP_TIME_ZONE }).format(new Date(displayed_at))}</time></button>)}</div> : <EmptyState title="今天还没有 Mania 推荐记录" description="当一页推荐谱面完整展示后，会自动出现在这里。" />}
             </div>
           </Dialog.Content>
         </Dialog.Portal>
@@ -466,7 +477,7 @@ export function ManiaSimilarBeatmapsPage() {
       ) : (
         <>
           <Card className="mb-4 flex items-center justify-between gap-4 border-white/[0.055] bg-black/[0.06] px-4 py-2.5">
-            <div className="min-w-0 text-xs text-slate-500"><span className="mr-2 inline-flex items-center gap-1.5 text-slate-400"><span className="size-1.5 rounded-full bg-emerald-400/70" />Mania 索引已就绪</span><span>{status.record_count == null ? "已通过本机只读校验" : `共 ${status.record_count.toLocaleString()} 条记录`}{KEY_COUNTS.map((keyCount) => status.records_by_key_count?.[keyCount] == null ? "" : ` · ${keyCount}K ${status.records_by_key_count[keyCount]!.toLocaleString()}`).join("")}{status.analyzer_version == null ? "" : ` · Analyzer v${status.analyzer_version}`} · {formatDataCutoff(status.data_cutoff_at)}</span></div>
+            <div className="min-w-0 text-xs text-slate-500"><span className="mr-2 inline-flex items-center gap-1.5 text-slate-400"><span className="size-1.5 rounded-full bg-emerald-400/70" />Mania 索引已就绪</span><span>{status.record_count == null ? "已配置索引目录" : `共 ${status.record_count.toLocaleString()} 条记录`}{KEY_COUNTS.map((keyCount) => status.records_by_key_count?.[keyCount] == null ? "" : ` · ${keyCount}K ${status.records_by_key_count[keyCount]!.toLocaleString()}`).join("")}{status.analyzer_version == null ? "" : ` · Analyzer v${status.analyzer_version}`} · {formatDataCutoff(status.data_cutoff_at)}</span></div>
             <div className="flex gap-2"><Button type="button" size="sm" variant="ghost" onClick={() => void statusQuery.refetch()} disabled={statusQuery.isFetching}><RefreshCw size={14} />重新校验</Button><Button type="button" size="sm" variant="ghost" onClick={() => void chooseIndexDirectory()} disabled={configuring}><FolderOpen size={14} />更换目录</Button></div>
           </Card>
 
@@ -498,12 +509,12 @@ export function ManiaSimilarBeatmapsPage() {
                 {recommendationResponse ? (
                   <Card className="mb-5 p-5"><span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--theme-primary)]">Mania 个性化推荐</span><h2 className="mt-2 text-lg font-semibold text-white">{recommendationResponse.kind === "recent" ? "根据最近游玩生成" : "根据你的 BP 生成"}</h2><p className="mt-1 text-sm text-slate-400">已使用 {recommendationResponse.seed_count} 张参考谱面{recommendationResponse.skipped_seed_count ? `，跳过 ${recommendationResponse.skipped_seed_count} 张不支持或无法读取的谱面` : ""}</p>{recommendationCompleting ? <p className="mt-3 flex items-center gap-2 text-xs text-[var(--theme-primary-light)]"><LoaderCircle className="size-3.5 animate-spin" />已按键数优先展示首批结果，正在后台完善更多推荐</p> : null}</Card>
                 ) : response ? (
-                  <Card className="similarity-reference-summary mb-4 grid items-center gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_230px]"><div><span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--theme-primary)]">Mania 参考谱面</span><h2 className="mt-2 text-lg font-semibold text-white">{response.target.key_count}K · {response.target.game_mod} · {response.target.version || "本地谱面"}</h2><p className="mt-1 text-sm text-slate-400">{response.target.artist} — {response.target.title}</p><div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400"><span>{response.target.family.toUpperCase()} / {response.target.pattern}</span><span>同键数难度分位 {percentileLabel(response.target.difficulty_percentile)}</span><span>BPM {Math.round(response.target.base.bpm)}</span><span>有效长度 {durationLabel(response.target.base.active_length_seconds)}</span></div></div><SimilarityRadar compact target={response.target.difficulty} /></Card>
+                  <Card className="similarity-reference-summary mb-4 grid items-center gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1fr)_230px]"><div><span className="text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--theme-primary)]">Mania 参考谱面</span><h2 className="mt-2 text-lg font-semibold text-white">{response.target.key_count}K · {response.target.game_mod} · {response.target.version || "本地谱面"}</h2><p className="mt-1 text-sm text-slate-400">{response.target.artist} — {response.target.title}</p><div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-400"><span>{response.target.pattern_view?.mode_tag ?? response.target.family.toUpperCase()} / {response.target.pattern_view?.category ?? response.target.pattern}</span><span>同键数难度分位 {percentileLabel(response.target.difficulty_percentile)}</span><span>BPM {Math.round(response.target.base.bpm)}</span><span>有效长度 {durationLabel(response.target.base.active_length_seconds)}</span></div></div><div><SimilarityRadar compact patternView={response.target.pattern_view} target={response.target.difficulty} />{response.target.pattern_view ? <div className="mt-3"><MmaPatternPanel compact view={response.target.pattern_view} /></div> : null}</div></Card>
                 ) : null}
 
                 {recommendationResponse ? <div className="mb-4 inline-flex rounded-lg border border-white/[0.08] bg-black/15 p-1" role="tablist" aria-label="Mania 键数分组">{KEY_COUNTS.map((keyCount) => { const group = recommendationResponse.groups.find((item) => item.key_count === keyCount); const first = group?.results[0]; return <Button aria-selected={activeKeyCount === keyCount} key={keyCount} onClick={() => { setActiveKeyCount(keyCount); setSelectedResultKey(first ? maniaResultKey(first) : null); }} role="tab" size="sm" type="button" variant={activeKeyCount === keyCount ? "primary" : "ghost"}>{keyCount}K · {group?.results.length ?? 0}<span className="ml-1 text-[10px] opacity-60">({group?.seed_count ?? 0} seeds)</span></Button>; })}</div> : null}
 
-                <div className="mb-3 flex items-end justify-between gap-3"><div><span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">推荐结果</span><h2 className="mt-1 text-base font-semibold text-white">{allResults.length} 个 {activeKeyCount}K 相似谱面集</h2></div><div className="flex flex-wrap items-center justify-end gap-2"><span className="text-sm text-slate-500">第 {activeResultBatch + 1} / {resultBatchCount} 批</span>{allResults.length > resultsPerPage ? <Button disabled={quickDownloadId !== null} onClick={showNextBatch} size="sm"><RefreshCw className="size-3.5" />换一批</Button> : null}<Button disabled={!visibleResults.length || quickDownloadId !== null} loading={quickDownloadId === -1} onClick={() => void downloadResults(visibleResults)} size="sm" variant="primary"><Download className="size-3.5" />下载本批</Button></div></div>
+                <div className="mb-3 flex items-end justify-between gap-3"><div><span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">推荐结果</span><h2 className="mt-1 text-base font-semibold text-white">{allResults.length} 个 {activeKeyCount}K 相似谱面集</h2></div><div className="flex flex-wrap items-center justify-end gap-2"><span className="text-sm text-slate-500">第 {activeResultBatch + 1} / {resultBatchCount} 批</span>{allResults.length > resultsPerPage ? <Button disabled={quickDownloadId !== null} onClick={showNextBatch} size="sm"><RefreshCw className="size-3.5" />换一批</Button> : null}<Button disabled={!visibleResults.some((result) => result.online_url) || quickDownloadId !== null} loading={quickDownloadId === -1} onClick={() => void downloadResults(visibleResults)} size="sm" variant="primary"><Download className="size-3.5" />下载本批</Button></div></div>
 
                 {allResults.length ? <div className="space-y-3">{visibleResults.map((result) => <SimilarityResultCard key={maniaResultKey(result)} result={result} recommendedBy={activeGroup?.results.find((item) => maniaResultKey(item) === maniaResultKey(result))?.recommended_by} selected={selected ? maniaResultKey(selected) === maniaResultKey(result) : false} onSelect={() => setSelectedResultKey(maniaResultKey(result))} onDownload={() => void downloadResults([result])} onAddToCollection={() => openCollectionDialog([{ beatmap_id: result.beatmap_id, beatmapset_id: result.beatmapset_id, checksum: null, ruleset: result.ruleset, difficulty_name: `${result.version} +${result.game_mod}`, title: result.title, artist: result.artist, creator: result.creator }])} downloading={quickDownloadId === result.beatmap_id} downloadDisabled={quickDownloadId !== null} onOpen={() => openOnlineBeatmap(result)} onPreview={() => void togglePreview(result)} playing={playingId === result.beatmap_id} previewLoading={previewLoadingId === result.beatmap_id} />)}</div> : <EmptyState title={`没有可展示的 ${activeKeyCount}K 推荐`} description="该键数组可能没有可用参考成绩，或今天已展示过全部候选；可切换其他键数组。" />}
               </div>

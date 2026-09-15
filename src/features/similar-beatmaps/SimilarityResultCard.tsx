@@ -5,6 +5,7 @@ import { Badge, Button, Card } from "../../shared/components/ui";
 import { DifficultyIcon } from "../../shared/components/DifficultyIcon";
 import { desktopApi, isTauri } from "../../shared/lib/tauri";
 import type { AnySimilarityBeatmap, AnySimilarityResult, ManiaModeFamily } from "../../shared/types/osu";
+import { MmaNoteShare } from "./MmaPatternPanel";
 
 const maniaFamilyLabels: Record<ManiaModeFamily, string> = {
   rc: "RC",
@@ -77,7 +78,7 @@ export function SimilarityResultCard({
   const beatmapset = useQuery({
     queryKey: ["similarity-result-beatmapset", result.ruleset, result.beatmapset_id],
     queryFn: () => desktopApi.getOnlineBeatmapset(result.beatmapset_id),
-    enabled: isTauri(),
+    enabled: isTauri() && result.online_url.length > 0 && result.beatmapset_id > 0,
     staleTime: Infinity,
     retry: 1,
   });
@@ -105,7 +106,7 @@ export function SimilarityResultCard({
           <div className="flex flex-wrap items-center gap-2">
             <Badge className="normal-case text-xs tracking-normal" tone="cyan">难度 · {result.version}</Badge>
             {result.ruleset === "mania" ? <Badge className="normal-case text-xs tracking-normal" tone="pink">{result.game_mod}</Badge> : null}
-            <span className="truncate text-sm text-slate-500">#{result.beatmap_id}</span>
+            <span className="truncate text-sm text-slate-500">{result.online_url ? `#${result.beatmap_id}` : "本地谱面"}</span>
           </div>
           <h3 className="mt-2 truncate text-base font-semibold text-white">{result.artist} - {result.title}</h3>
           <p className="mt-1 truncate text-sm text-slate-400">[{result.version}] · mapped by {result.creator}</p>
@@ -119,22 +120,14 @@ export function SimilarityResultCard({
             <>
               <div className="mt-3 grid grid-cols-4 gap-2">
                 <Metric label="键数" tone={osuTone(result.key_count, 10)} value={`${result.key_count}K`} />
-                <Metric label="键型" tone={osuTone(result.style.chord_rate)} value={maniaFamilyLabels[result.family]} />
-                <Metric label="主模式" tone={osuTone(result.style.stream)} value={result.pattern} />
+                <Metric label="键型" tone={osuTone(result.style.chord_rate)} value={result.pattern_view?.mode_tag ?? maniaFamilyLabels[result.family]} />
+                <Metric label="主模式" tone={osuTone(result.style.stream)} value={result.pattern_view?.category ?? result.pattern} />
                 <Metric label="难度分位" tone={osuTone(result.difficulty_percentile, 1)} value={`${Math.round(result.difficulty_percentile * 100)}%`} />
                 <Metric label="BPM" tone={osuTone(result.base.bpm, 300)} value={Math.round(result.base.bpm).toString()} />
                 <Metric label="有效长度" tone={osuTone(result.base.active_length_seconds, 360)} value={durationLabel(result.base.active_length_seconds)} />
-                <Metric label="平均 NPS" tone={osuTone(result.base.avg_nps, 15)} value={result.base.avg_nps.toFixed(2)} />
-                <Metric label="LN 比例" tone={osuTone(result.style.ln_note_ratio, 1)} value={`${Math.round(result.style.ln_note_ratio * 100)}%`} />
+                <Metric label="LN 比例" tone={osuTone(result.pattern_view?.ln_note_ratio ?? result.style.ln_note_ratio, 1)} value={`${Math.round((result.pattern_view?.ln_note_ratio ?? result.style.ln_note_ratio) * 100)}%`} />
               </div>
-              <div aria-label="Mania 距离分量" className="mt-2 flex flex-wrap gap-x-3 gap-y-1 rounded-md border border-white/[0.06] bg-black/[0.12] px-3 py-2 font-mono text-[10px] text-slate-400">
-                <span className="text-slate-300">总距 {result.final_distance.toFixed(4)}</span>
-                <span>强度 {result.distance_components.skill.toFixed(3)}</span>
-                <span>键型 {result.distance_components.pattern.toFixed(3)}</span>
-                <span>结构 {result.distance_components.structure.toFixed(3)}</span>
-                <span>分位 {result.distance_components.difficulty.toFixed(3)}</span>
-                <span>上下文 {result.distance_components.context.toFixed(3)}</span>
-              </div>
+              {result.pattern_view ? <div className="mt-2"><MmaNoteShare view={result.pattern_view} /></div> : null}
             </>
           ) : (
             <div className="mt-3 grid grid-cols-4 gap-2">
@@ -150,14 +143,14 @@ export function SimilarityResultCard({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <Button aria-label="加入收藏夹" onClick={(event) => { event.stopPropagation(); onAddToCollection(); }} size="icon" variant="ghost"><Heart className="size-4" /></Button>
-          <Button aria-label={playing ? "暂停试听" : "试听"} loading={previewLoading} onClick={(event) => { event.stopPropagation(); onPreview(); }} size="icon" variant={playing ? "primary" : "ghost"}>
+          <Button disabled={!result.online_url} aria-label="加入收藏夹" onClick={(event) => { event.stopPropagation(); onAddToCollection(); }} size="icon" variant="ghost"><Heart className="size-4" /></Button>
+          <Button disabled={!result.online_url} aria-label={playing ? "暂停试听" : "试听"} loading={previewLoading} onClick={(event) => { event.stopPropagation(); onPreview(); }} size="icon" variant={playing ? "primary" : "ghost"}>
             {playing ? <Pause className="size-4" /> : <Headphones className="size-4" />}
           </Button>
-          <Button aria-label={`快捷下载 ${result.artist} - ${result.title}`} disabled={downloadDisabled} loading={downloading} onClick={(event) => { event.stopPropagation(); onDownload(); }} size="icon" variant="ghost">
+          <Button aria-label={`快捷下载 ${result.artist} - ${result.title}`} disabled={downloadDisabled || !result.online_url} loading={downloading} onClick={(event) => { event.stopPropagation(); onDownload(); }} size="icon" variant="ghost">
             <Download className="size-4" />
           </Button>
-          <Button aria-label="在在线谱面中查看" onClick={(event) => { event.stopPropagation(); onOpen(); }} size="icon" variant="ghost">
+          <Button disabled={!result.online_url} aria-label="在在线谱面中查看" onClick={(event) => { event.stopPropagation(); onOpen(); }} size="icon" variant="ghost">
             <ArrowRight className="size-4" />
           </Button>
         </div>

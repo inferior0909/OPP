@@ -3457,6 +3457,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mania-pattern"
+version = "0.1.0"
+source = "git+https://github.com/inferior0909/osu-difficulty-lab?rev=f681bc460a9a473f10c17f6bb89754396ff5e6a4#f681bc460a9a473f10c17f6bb89754396ff5e6a4"
+dependencies = [
+ "anyhow",
+ "serde",
+]
+
+[[package]]
 name = "markup5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4280,6 +4289,7 @@ dependencies = [
  "bincode",
  "hex",
  "hnsw",
+ "mania-pattern",
  "memmap2",
  "rand_pcg 0.3.1",
  "rosu-pp 4.0.1 (git+https://github.com/Apeuriox/rosu-pp.git?branch=pp-rework-202607)",

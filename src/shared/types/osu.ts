@@ -373,6 +373,26 @@ export type ManiaPattern =
   | "density"
   | "wildcard";
 
+export interface ManiaPatternBar {
+  pattern: string;
+  amount: number;
+  relative: number;
+  specific_types: [string, number][];
+}
+
+export interface ManiaPatternView {
+  category: string;
+  mode_tag: string;
+  coverage: number[];
+  bars: ManiaPatternBar[];
+  subtypes: [string, number][];
+  ln_note_ratio: number;
+  intensity: number[];
+  temporal: number[];
+  duration_seconds: number;
+  sv_amount: number;
+}
+
 export interface ManiaSimilarityBeatmap {
   ruleset: "mania";
   beatmap_id: number;
@@ -391,6 +411,7 @@ export interface ManiaSimilarityBeatmap {
   difficulty_percentile: number;
   difficulty_band: number;
   game_mod: ManiaGameMod;
+  pattern_view: ManiaPatternView | null;
 }
 
 export interface ManiaSimilarityTarget extends ManiaSimilarityBeatmap {

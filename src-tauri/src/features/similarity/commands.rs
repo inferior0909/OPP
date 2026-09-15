@@ -39,8 +39,7 @@ pub async fn get_similarity_index_status(
         return Ok(SimilarityIndexStatus::unsupported(ruleset));
     }
     let directory = configured_directory(&state, ruleset)?;
-    state.similarity.clear(ruleset);
-    inspect(state.similarity.clone(), ruleset, directory).await
+    Ok(state.similarity.peek(ruleset, directory.as_deref()))
 }
 
 #[tauri::command]
@@ -312,7 +311,13 @@ async fn recommend_mania(
             }
         };
         match target {
-            Ok(target) if matches!(target.record.key_count, 4 | 6 | 7) => targets.push(target),
+            Ok(target) if matches!(target.record.key_count, 4 | 6 | 7) => {
+                if target.pattern.is_some() {
+                    targets.push(target);
+                } else {
+                    skipped_seed_count += 1;
+                }
+            }
             Ok(_) | Err(_) => skipped_seed_count += 1,
         }
     }

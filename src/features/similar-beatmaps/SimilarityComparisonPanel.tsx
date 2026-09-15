@@ -12,6 +12,7 @@ import type {
 } from "../../shared/types/osu";
 import { DynamicWeightProfileCard } from "./DynamicWeightProfile";
 import { maniaSkillProfile } from "./maniaDifficulty";
+import { MmaPatternPanel } from "./MmaPatternPanel";
 import { SimilarityRadar } from "./SimilarityRadar";
 
 const difficultyDimensions = [
@@ -54,14 +55,6 @@ const maniaStructureDimensions: Array<[keyof ManiaStyleVector, string]> = [
   ["hybrid_row_ratio", "Hybrid Row"],
   ["peak_to_sustain_gap", "Peak/Sustain Gap"],
 ];
-
-const distanceDimensions = [
-  ["skill", "强度"],
-  ["pattern", "键型"],
-  ["structure", "结构"],
-  ["difficulty", "难度分位"],
-  ["context", "BPM / 有效时长"],
-] as const;
 
 function Difference({ value, digits }: { value: number; digits: number }) {
   const tone = value === 0 ? "text-slate-500" : value > 0 ? "text-rose-300" : "text-emerald-300";
@@ -143,6 +136,8 @@ function ManiaComparison({
 }) {
   const targetSkillProfile = maniaSkillProfile(target.difficulty);
   const selectedSkillProfile = maniaSkillProfile(selected.difficulty);
+  // Both sides need key-pattern data for an MMA comparison; otherwise keep the legacy layout.
+  const mmaComparison = Boolean(target.pattern_view && selected.pattern_view);
   return (
     <aside className="sticky top-[120px] self-start">
       <Card className="similarity-comparison-panel max-h-[calc(100vh-140px)] overflow-y-auto p-5">
@@ -150,8 +145,14 @@ function ManiaComparison({
         <h2 className="mt-2 text-base font-semibold text-white">{selected.key_count}K · {selected.game_mod} · {selected.version}</h2>
         <p className="mt-1 truncate text-xs text-slate-400">{selected.artist} — {selected.title}</p>
         {recommendedBy ? <p className="mt-2 text-xs text-cyan-200">由 {recommendedBy.artist} - {recommendedBy.title} [{recommendedBy.version}] 推荐</p> : null}
-        <SimilarityRadar target={target.difficulty} comparison={selected.difficulty} />
+        <SimilarityRadar comparison={selected.difficulty} patternView={target.pattern_view} patternViewComparison={mmaComparison ? selected.pattern_view : null} target={target.difficulty} />
 
+        {target.pattern_view || selected.pattern_view ? <div className="mt-4 grid gap-5">
+          {target.pattern_view ? <div><p className="mb-2 text-xs text-cyan-200">参考谱面</p><MmaPatternPanel view={target.pattern_view} /></div> : null}
+          {selected.pattern_view ? <div><p className="mb-2 text-xs text-pink-200">候选谱面</p><MmaPatternPanel view={selected.pattern_view} /></div> : null}
+        </div> : null}
+
+        {!mmaComparison ? <>
         <section className="mb-4">
           <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">八维相对强项</p>
           <FeatureRows dimensions={maniaDifficultyDimensions} selected={selectedSkillProfile} target={targetSkillProfile} />
@@ -164,11 +165,8 @@ function ManiaComparison({
           <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">结构特征</p>
           <FeatureRows dimensions={maniaStructureDimensions} selected={selected.style} target={target.style} />
         </section>
-        <section className="mb-4 border-t border-white/[0.07] pt-3">
-          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">距离分量</p>
-          {distanceDimensions.map(([key, label]) => <div className="flex items-center justify-between border-b border-white/[0.055] py-1.5 text-xs last:border-b-0" key={key}><span className="text-slate-400">{label}</span><span className="font-mono text-slate-200">{selected.distance_components[key].toFixed(4)}</span></div>)}
-        </section>
-        <Button className="w-full" variant="primary" type="button" onClick={onOpen}>在在线谱面中查看</Button>
+        </> : null}
+        <Button disabled={!selected.online_url} className="w-full" variant="primary" type="button" onClick={onOpen}>在在线谱面中查看</Button>
       </Card>
     </aside>
   );

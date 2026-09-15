@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -90,6 +90,22 @@ const base = {
   sv_change_rate: 0,
 };
 
+const patternView = {
+  category: "Shield",
+  mode_tag: "Mix",
+  coverage: [0.52, 0.31, 0.12, 0.66, 0.48, 0.09],
+  bars: [
+    { pattern: "Coordination", amount: 158_000, relative: 0.66, specific_types: [["Shield", 0.092], ["Chordjack", 0.041]] as [string, number][] },
+    { pattern: "Wildcard", amount: 239_000, relative: 1, specific_types: [] as [string, number][] },
+  ],
+  subtypes: [["Shield", 0.092]] as [string, number][],
+  ln_note_ratio: 0.234,
+  intensity: [6.4, 12.1, 5.2, 18.5],
+  temporal: [0.42, 0.18, 0.12],
+  duration_seconds: 120,
+  sv_amount: 0,
+};
+
 const target = {
   ruleset: "mania" as const,
   beatmap_id: 3001,
@@ -108,6 +124,7 @@ const target = {
   difficulty_percentile: 0.78,
   difficulty_band: 7,
   game_mod: "NM" as const,
+  pattern_view: patternView,
 };
 
 function maniaResult(beatmapId: number, keyCount: 4 | 6 | 7, title: string) {
@@ -120,6 +137,7 @@ function maniaResult(beatmapId: number, keyCount: 4 | 6 | 7, title: string) {
     key_count: keyCount,
     family: keyCount === 6 ? "hb" as const : "rc" as const,
     pattern: keyCount === 6 ? "coordination" as const : "stream" as const,
+    pattern_view: { ...patternView, category: "Jumpstream/Handstream Tech", mode_tag: "RC", ln_note_ratio: 0.05 },
     final_distance: 0.054,
     distance_components: { skill: 0.04, pattern: 0.06, structure: 0.08, difficulty: 0.03, context: 0.05 },
   };
@@ -215,8 +233,7 @@ describe("Mania similarity", () => {
     expect(await screen.findByText("Reference - Stream Candidate")).toBeInTheDocument();
     expect(screen.getByText("RC")).toBeInTheDocument();
     expect(screen.getAllByText("78%").length).toBeGreaterThan(0);
-    expect(screen.getByLabelText("Mania 距离分量")).toHaveTextContent("总距 0.0540");
-    expect(screen.getByLabelText("Mania 距离分量")).toHaveTextContent("上下文 0.050");
+    expect(screen.queryByLabelText("Mania 距离分量")).not.toBeInTheDocument();
     expect(screen.getByTestId("comparison-radar")).toBeInTheDocument();
     expect(query).toHaveBeenCalledWith(expect.objectContaining({ ruleset: "mania", source: { kind: "beatmap_id", value: "3001" }, result_limit: 50, target_mod: "DT", candidate_mods: ["NM", "DT", "HT"] }));
 
@@ -228,6 +245,87 @@ describe("Mania similarity", () => {
     expect(screen.queryByText("Reference - Stream Candidate")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "切换 mania" }));
     expect(await screen.findByText("Reference - Stream Candidate")).toBeInTheDocument();
+  });
+
+  it("shows the analyser main mode and the RC/LN note share for the reference chart and each result", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(desktopApi, "getSimilarityIndexStatus").mockResolvedValue(maniaReady);
+    vi.spyOn(desktopApi, "querySimilarBeatmaps").mockResolvedValue(queryResponse);
+
+    renderPage();
+    await user.type(await screen.findByLabelText("Beatmap ID 或 osu! 链接"), "3001");
+    await user.click(screen.getByRole("button", { name: "查找相似谱面" }));
+    expect(await screen.findByText("Reference - Stream Candidate")).toBeInTheDocument();
+
+    expect(screen.getByText("Mix / Shield")).toBeInTheDocument();
+    expect(screen.getAllByText("Mix · Shield").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("RC 76.6%").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("LN 23.4%").length).toBeGreaterThan(0);
+    expect(screen.getByText("Jumpstream/Handstream Tech")).toBeInTheDocument();
+    expect(screen.getByText("RC · Jumpstream/Handstream Tech")).toBeInTheDocument();
+    expect(screen.getAllByText("RC 95.0%").length).toBeGreaterThan(0);
+    const wildcardMeters = screen.getAllByRole("meter", { name: "Wildcard 相对量" });
+    expect(wildcardMeters.length).toBeGreaterThan(0);
+    expect(wildcardMeters.every((meter) => meter.getAttribute("aria-valuenow") === "100")).toBe(true);
+    expect(screen.queryByText(/分类依据|相对键型量|模式可以重叠/)).not.toBeInTheDocument();
+  });
+
+  it("keeps today's Mania layout when the dataset has no key-pattern records", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(desktopApi, "getSimilarityIndexStatus").mockResolvedValue(maniaReady);
+    vi.spyOn(desktopApi, "querySimilarBeatmaps").mockResolvedValue({
+      ...queryResponse,
+      target: { ...queryResponse.target, pattern_view: null },
+      results: queryResponse.results.map((result) => ({ ...result, pattern_view: null })),
+    });
+
+    renderPage();
+    await user.type(await screen.findByLabelText("Beatmap ID 或 osu! 链接"), "3001");
+    await user.click(screen.getByRole("button", { name: "查找相似谱面" }));
+    expect(await screen.findByText("Reference - Stream Candidate")).toBeInTheDocument();
+
+    expect(screen.getByText("RC / stream")).toBeInTheDocument();
+    expect(screen.getByText("stream")).toBeInTheDocument();
+    expect(screen.queryByText(/Mix · Shield|RC 76.6%|LN 23.4%/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("RC 与 LN 音符占比")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("MMA 键型分布")).not.toBeInTheDocument();
+    expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+  });
+
+  it("keeps the legacy comparison when only the candidate has key-pattern records", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(desktopApi, "getSimilarityIndexStatus").mockResolvedValue(maniaReady);
+    vi.spyOn(desktopApi, "querySimilarBeatmaps").mockResolvedValue({
+      ...queryResponse,
+      target: { ...queryResponse.target, pattern_view: null },
+    });
+
+    renderPage();
+    await user.type(await screen.findByLabelText("Beatmap ID 或 osu! 链接"), "3001");
+    await user.click(screen.getByRole("button", { name: "查找相似谱面" }));
+    expect(await screen.findByText("Reference - Stream Candidate")).toBeInTheDocument();
+
+    expect(screen.getAllByText("候选谱面").length).toBeGreaterThan(0);
+    expect(screen.queryByText("参考谱面")).not.toBeInTheDocument();
+    expect(screen.getAllByText("八维相对强项").length).toBeGreaterThan(0);
+  });
+
+  it("keeps the legacy comparison when only the reference has key-pattern records", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(desktopApi, "getSimilarityIndexStatus").mockResolvedValue(maniaReady);
+    vi.spyOn(desktopApi, "querySimilarBeatmaps").mockResolvedValue({
+      ...queryResponse,
+      results: queryResponse.results.map((result) => ({ ...result, pattern_view: null })),
+    });
+
+    renderPage();
+    await user.type(await screen.findByLabelText("Beatmap ID 或 osu! 链接"), "3001");
+    await user.click(screen.getByRole("button", { name: "查找相似谱面" }));
+    expect(await screen.findByText("Reference - Stream Candidate")).toBeInTheDocument();
+
+    expect(screen.getAllByText("参考谱面").length).toBeGreaterThan(0);
+    expect(screen.queryByText("候选谱面")).not.toBeInTheDocument();
+    expect(screen.getAllByText("八维相对强项").length).toBeGreaterThan(0);
   });
 
   it("groups recommendations into independently paged 4K, 6K and 7K tabs and records Mania history", async () => {
@@ -349,6 +447,87 @@ describe("Mania similarity", () => {
     await user.click(screen.getByRole("button", { name: "打开 Mania search 深链" }));
 
     await waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+  });
+
+  it("keeps dataset-local results in today's history without opening an online page", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(desktopApi, "getSimilarityIndexStatus").mockResolvedValue(maniaReady);
+    const localResults = Array.from({ length: 5 }, (_, index) => ({
+      ...maniaResult(2 ** 48 + 3700 + index, 4, `Local Recommendation ${index + 1}`),
+      beatmapset_id: 2 ** 48 + 4100 + index,
+      online_url: "",
+      recommended_by: target,
+    }));
+    vi.spyOn(desktopApi, "recommendSimilarBeatmaps").mockImplementation(async (request) => ({
+      ...recommendationResponse,
+      kind: request.kind,
+      groups: request.seed_limit === 5
+        ? recommendationResponse.groups.map((group) => ({ ...group, results: [] }))
+        : [
+          { ...recommendationResponse.groups[0], results: localResults },
+          recommendationResponse.groups[1],
+          recommendationResponse.groups[2],
+        ],
+    }));
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "根据最近游玩推荐" }));
+    expect(await screen.findByText("Reference - Local Recommendation 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下载本批" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "今日推荐历史" }));
+    const history = within(await screen.findByRole("dialog"));
+    const entry = history.getByRole("button", { name: /Local Recommendation 1/ });
+    expect(entry).toBeDisabled();
+    expect(entry).toHaveTextContent("本地谱面");
+
+    await user.click(entry);
+
+    expect(history.getByRole("button", { name: /Local Recommendation 1/ })).toBeInTheDocument();
+    expect(screen.getByTestId("similarity-location")).toHaveTextContent(/^\/online\/similar$/);
+  });
+
+  it("downloads only the online candidates of a Mania recommendation page", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(desktopApi, "getSimilarityIndexStatus").mockResolvedValue(maniaReady);
+    const onlineResults = [3801, 3802, 3803]
+      .map((beatmapId, index) => ({ ...maniaResult(beatmapId, 4, `Online Recommendation ${index + 1}`), recommended_by: target }));
+    const localResults = [3804, 3805]
+      .map((beatmapId, index) => ({
+        ...maniaResult(2 ** 48 + beatmapId, 4, `Local Recommendation ${index + 1}`),
+        beatmapset_id: 2 ** 48 + beatmapId + 100,
+        online_url: "",
+        recommended_by: target,
+      }));
+    vi.spyOn(desktopApi, "recommendSimilarBeatmaps").mockImplementation(async (request) => ({
+      ...recommendationResponse,
+      kind: request.kind,
+      groups: request.seed_limit === 5
+        ? recommendationResponse.groups.map((group) => ({ ...group, results: [] }))
+        : [
+          { ...recommendationResponse.groups[0], results: [...onlineResults, ...localResults] },
+          recommendationResponse.groups[1],
+          recommendationResponse.groups[2],
+        ],
+    }));
+    const download = vi.spyOn(desktopApi, "downloadOnlineBeatmapsets").mockResolvedValue({
+      destination: "D:/downloads",
+      total: 3,
+      completed: 3,
+      skipped: 0,
+      failed: 0,
+      cancelled: false,
+      failures: [],
+    });
+
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "根据最近游玩推荐" }));
+    await screen.findByText("Reference - Local Recommendation 2");
+
+    await user.click(screen.getByRole("button", { name: "下载本批" }));
+
+    await waitFor(() => expect(download).toHaveBeenCalledTimes(1));
+    expect(download.mock.calls[0][0].items.map((item) => item.beatmapset_id)).toEqual([3901, 3902, 3903]);
   });
 
   it("does not let an unconsumed deep link lock later global mode changes", async () => {

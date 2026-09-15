@@ -30,6 +30,33 @@ impl SimilarityRuntime {
         }
     }
 
+    /// 只检查目录配置，不读取数据集内容。
+    pub fn peek(&self, ruleset: Ruleset, directory: Option<&str>) -> SimilarityIndexStatus {
+        if !matches!(ruleset, Ruleset::Mania) {
+            return self.inspect(ruleset, directory);
+        }
+        let Some(directory) = directory.map(str::trim).filter(|value| !value.is_empty()) else {
+            return SimilarityIndexStatus::unconfigured(ruleset);
+        };
+        if !Path::new(directory).is_dir() {
+            self.clear(ruleset);
+            return unavailable_status(
+                ruleset,
+                directory,
+                SimilarityIndexState::Missing,
+                "已配置的本地索引目录不可用，请重新选择。",
+            );
+        }
+        if self.mania.lock().is_ok_and(|cached| {
+            cached
+                .as_ref()
+                .is_some_and(|cached| cached.directory == Path::new(directory))
+        }) {
+            return self.inspect(ruleset, Some(directory));
+        }
+        SimilarityIndexStatus::configured(ruleset, directory)
+    }
+
     pub fn inspect(&self, ruleset: Ruleset, directory: Option<&str>) -> SimilarityIndexStatus {
         if matches!(ruleset, Ruleset::Taiko | Ruleset::Fruits) {
             return SimilarityIndexStatus::unsupported(ruleset);
@@ -213,6 +240,21 @@ mod tests {
             let status = runtime.inspect(ruleset, directory.path().to_str());
             assert_eq!(status.state, SimilarityIndexState::Invalid);
         }
+    }
+
+    #[test]
+    fn configured_mania_directories_report_ready_without_reading_the_dataset() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let runtime = SimilarityRuntime::default();
+        let status = runtime.peek(Ruleset::Mania, directory.path().to_str());
+        assert_eq!(status.state, SimilarityIndexState::Ready);
+        assert!(status.record_count.is_none());
+        assert_eq!(
+            runtime
+                .peek(Ruleset::Osu, directory.path().to_str())
+                .state,
+            SimilarityIndexState::Invalid
+        );
     }
 
     #[test]
